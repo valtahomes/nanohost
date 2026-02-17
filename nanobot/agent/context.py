@@ -61,10 +61,11 @@ class ContextBuilder:
         # 2. Available skills: only show summary (agent uses read_file to load)
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
-            parts.append(f"""# Skills
+            parts.append(f"""# Skills (Reference Guides)
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+Skills are NOT tools — they are reference documents that teach you HOW to accomplish tasks using your actual tools (exec, web_search, web_fetch, read_file, etc.).
+Do NOT try to call a skill by name. Instead, read the SKILL.md file to learn the approach, then use the appropriate tool.
+For example, the "weather" skill teaches you to use `exec` with `curl wttr.in` or `web_search` — it is NOT a callable tool.
 
 {skills_summary}""")
         
