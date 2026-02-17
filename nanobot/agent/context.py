@@ -123,6 +123,7 @@ For normal conversation, just respond with text - do not call the message tool.
 - **Do NOT memorize tool failures.** Temporary errors (API timeouts, network issues) must never be written to MEMORY.md. Only store lasting, useful facts.
 - **Always try a tool** for real-time questions (weather, news, prices). Never say "I cannot access real-time data" without trying first.
 
+Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 When remembering something important, write to {workspace_path}/memory/MEMORY.md
 To recall past events, grep {workspace_path}/memory/HISTORY.md"""
     
