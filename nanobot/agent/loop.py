@@ -146,7 +146,7 @@ class AgentLoop:
             if isinstance(cron_tool, CronTool):
                 cron_tool.set_context(channel, chat_id)
 
-    async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str]]:
+    async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str], bool]:
         """
         Run the agent iteration loop.
 
@@ -154,12 +154,13 @@ class AgentLoop:
             initial_messages: Starting messages for the LLM conversation.
 
         Returns:
-            Tuple of (final_content, list_of_tools_used).
+            Tuple of (final_content, list_of_tools_used, is_error).
         """
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        is_error = False
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -171,6 +172,11 @@ class AgentLoop:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
+
+            if response.finish_reason == "error":
+                final_content = response.content
+                is_error = True
+                break
 
             if response.has_tool_calls:
                 tool_call_dicts = [
@@ -202,7 +208,7 @@ class AgentLoop:
                 final_content = response.content
                 break
 
-        return final_content, tools_used
+        return final_content, tools_used, is_error
 
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -297,24 +303,28 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
         )
-        final_content, tools_used = await self._run_agent_loop(initial_messages)
+        final_content, tools_used, is_error = await self._run_agent_loop(initial_messages)
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
-        
+
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
-        
-        session.add_message("user", msg.content)
-        session.add_message("assistant", final_content,
-                            tools_used=tools_used if tools_used else None)
-        self.sessions.save(session)
-        
+
+        # Don't save error responses to session — they pollute history and waste tokens
+        if not is_error:
+            session.add_message("user", msg.content)
+            session.add_message("assistant", final_content,
+                                tools_used=tools_used if tools_used else None)
+            self.sessions.save(session)
+        else:
+            logger.warning(f"LLM error, not saving to session: {final_content[:100]}")
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            metadata=msg.metadata or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
+            metadata=msg.metadata or {},
         )
     
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
@@ -345,14 +355,15 @@ class AgentLoop:
             channel=origin_channel,
             chat_id=origin_chat_id,
         )
-        final_content, _ = await self._run_agent_loop(initial_messages)
+        final_content, _, is_error = await self._run_agent_loop(initial_messages)
 
         if final_content is None:
             final_content = "Background task completed."
-        
-        session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
-        session.add_message("assistant", final_content)
-        self.sessions.save(session)
+
+        if not is_error:
+            session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
+            session.add_message("assistant", final_content)
+            self.sessions.save(session)
         
         return OutboundMessage(
             channel=origin_channel,
