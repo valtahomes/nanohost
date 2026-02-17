@@ -176,7 +176,7 @@ class WebFetchTool(Tool):
             # If extraction yielded almost nothing, suggest fallback
             stripped = text.strip()
             if len(stripped) < 50:
-                return json.dumps({"error": "Content extraction returned too little text. Try web_search instead.", "url": url})
+                return json.dumps({"error": "Content extraction returned too little text. Use web_search to find relevant content instead, and tell the user that the page could not be extracted so you searched for related information.", "url": url})
 
             truncated = len(text) > max_chars
             if truncated:
