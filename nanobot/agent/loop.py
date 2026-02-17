@@ -25,6 +25,22 @@ from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import Session, SessionManager
 
 
+def _friendly_error(e: Exception) -> str:
+    """Convert raw exceptions into user-friendly messages."""
+    msg = str(e)
+    lower = msg.lower()
+    if "quota_exceeded" in lower or "402" in lower:
+        return "This month's free usage limit has been reached. Your quota resets on the 1st of next month."
+    if "rate_limited" in lower or "429" in lower:
+        return "Too many requests — please wait a moment and try again."
+    if "401" in lower or "unauthorized" in lower or "invalid token" in lower:
+        return "Authentication failed. Please check your token in Settings."
+    if "502" in lower or "failed to reach" in lower or "connection" in lower:
+        return "Could not reach the AI service. Please try again in a moment."
+    # Fallback: log the full error but show a clean message to user
+    return "Something went wrong. Please try again later."
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -54,8 +70,9 @@ class AgentLoop:
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
+        usage_reporting: "UsageReportingConfig | None" = None,
     ):
-        from nanobot.config.schema import ExecToolConfig
+        from nanobot.config.schema import ExecToolConfig, UsageReportingConfig
         from nanobot.cron.service import CronService
         self.bus = bus
         self.provider = provider
@@ -86,6 +103,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
         )
         
+        self._usage_reporting = usage_reporting
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_stack: AsyncExitStack | None = None
@@ -148,6 +166,26 @@ class AgentLoop:
             if isinstance(cron_tool, CronTool):
                 cron_tool.set_context(channel, chat_id)
 
+    async def _report_usage(self, usage: dict) -> None:
+        """Report usage to platform (BYOK mode). Fire-and-forget."""
+        if not self._usage_reporting or not self._usage_reporting.endpoint:
+            return
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    self._usage_reporting.endpoint,
+                    json={
+                        "model": self.model,
+                        "inputTokens": usage.get("prompt_tokens", 0),
+                        "outputTokens": usage.get("completion_tokens", 0),
+                    },
+                    headers={"Authorization": f"Bearer {self._usage_reporting.token}"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+        except Exception:
+            pass  # non-blocking, best-effort
+
     async def _run_agent_loop(self, initial_messages: list[dict]) -> tuple[str | None, list[str], bool]:
         """
         Run the agent iteration loop.
@@ -174,6 +212,9 @@ class AgentLoop:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
+
+            if response.usage:
+                asyncio.create_task(self._report_usage(response.usage))
 
             if response.finish_reason == "error":
                 final_content = response.content
@@ -233,7 +274,7 @@ class AgentLoop:
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content=f"Sorry, I encountered an error: {str(e)}"
+                        content=_friendly_error(e),
                     ))
             except asyncio.TimeoutError:
                 continue

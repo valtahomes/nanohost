@@ -234,6 +234,12 @@ class ToolsConfig(BaseModel):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class UsageReportingConfig(BaseModel):
+    """Client-side usage reporting (for BYOK mode)."""
+    endpoint: str = ""
+    token: str = ""
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
@@ -241,6 +247,9 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    usage_reporting: UsageReportingConfig = Field(
+        default_factory=UsageReportingConfig, alias="usageReporting"
+    )
     
     @property
     def workspace_path(self) -> Path:
