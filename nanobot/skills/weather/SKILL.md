@@ -7,7 +7,7 @@ metadata: {"nanobot":{"emoji":"🌤️","requires":{"bins":["curl"]}}}
 
 # Weather
 
-Two free services, no API keys needed.
+Two free services, no API keys needed. If both fail, fall back to `web_search`.
 
 ## wttr.in (primary)
 
@@ -47,3 +47,10 @@ curl -s "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&cu
 Find coordinates for a city, then query. Returns JSON with temp, windspeed, weathercode.
 
 Docs: https://open-meteo.com/en/docs
+
+## web_search (last resort)
+
+If wttr.in and Open-Meteo both fail or are unreachable, use the `web_search` tool:
+```
+web_search("Beijing weather today")
+```

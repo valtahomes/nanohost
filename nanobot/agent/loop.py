@@ -48,6 +48,7 @@ class AgentLoop:
         max_tokens: int = 4096,
         memory_window: int = 50,
         brave_api_key: str | None = None,
+        search_api_base: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         cron_service: "CronService | None" = None,
         restrict_to_workspace: bool = False,
@@ -65,6 +66,7 @@ class AgentLoop:
         self.max_tokens = max_tokens
         self.memory_window = memory_window
         self.brave_api_key = brave_api_key
+        self.search_api_base = search_api_base
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
@@ -107,7 +109,7 @@ class AgentLoop:
         ))
         
         # Web tools
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key))
+        self.tools.register(WebSearchTool(api_key=self.brave_api_key, api_base=self.search_api_base))
         self.tools.register(WebFetchTool())
         
         # Message tool
@@ -414,6 +416,8 @@ class AgentLoop:
 1. "history_entry": A paragraph (2-5 sentences) summarizing the key events/decisions/topics. Start with a timestamp like [YYYY-MM-DD HH:MM]. Include enough detail to be useful when found by grep search later.
 
 2. "memory_update": The updated long-term memory content. Add any new facts: user location, preferences, personal info, habits, project context, technical decisions, tools/services used. If nothing new, return the existing content unchanged.
+
+IMPORTANT: Do NOT store tool errors, API failures, or temporary issues (e.g. "web_search failed", "API key not configured", "network timeout") in memory_update. These are transient problems that may already be fixed. Only store lasting, useful facts.
 
 ## Current Long-term Memory
 {current_memory or "(empty)"}

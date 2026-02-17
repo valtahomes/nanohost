@@ -203,7 +203,8 @@ class GatewayConfig(BaseModel):
 
 class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
-    api_key: str = ""  # Brave Search API key
+    api_key: str = ""  # Brave Search API key, or proxy auth token
+    api_base: str = ""  # Search proxy base URL (if set, uses proxy instead of Brave)
     max_results: int = 5
 
 
