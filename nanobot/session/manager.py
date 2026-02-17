@@ -41,9 +41,21 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
     
-    def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
-        """Get recent messages in LLM format (role + content only)."""
-        return [{"role": m["role"], "content": m["content"]} for m in self.messages[-max_messages:]]
+    def get_history(self, max_messages: int = 500, max_tokens: int = 8000) -> list[dict[str, Any]]:
+        """Get recent messages in LLM format, bounded by count and token estimate.
+
+        Args:
+            max_messages: Maximum number of messages to return.
+            max_tokens: Approximate token budget for history (~4 chars per token).
+        """
+        recent = self.messages[-max_messages:]
+        # Trim from the front if token estimate exceeds budget
+        result = [{"role": m["role"], "content": m["content"]} for m in recent]
+        total_chars = sum(len(m["content"]) for m in result)
+        while result and total_chars > max_tokens * 4:
+            removed = result.pop(0)
+            total_chars -= len(removed["content"])
+        return result
     
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
