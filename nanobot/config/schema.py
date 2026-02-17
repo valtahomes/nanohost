@@ -310,5 +310,6 @@ class Config(BaseSettings):
     
     model_config = ConfigDict(
         env_prefix="NANOBOT_",
-        env_nested_delimiter="__"
+        env_nested_delimiter="__",
+        populate_by_name=True,
     )
