@@ -173,10 +173,15 @@ class WebFetchTool(Tool):
             else:
                 text, extractor = r.text, "raw"
             
+            # If extraction yielded almost nothing, suggest fallback
+            stripped = text.strip()
+            if len(stripped) < 50:
+                return json.dumps({"error": "Content extraction returned too little text. Try web_search instead.", "url": url})
+
             truncated = len(text) > max_chars
             if truncated:
                 text = text[:max_chars]
-            
+
             return json.dumps({"url": url, "finalUrl": str(r.url), "status": r.status_code,
                               "extractor": extractor, "truncated": truncated, "length": len(text), "text": text})
         except Exception as e:
