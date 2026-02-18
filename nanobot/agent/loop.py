@@ -141,6 +141,12 @@ class AgentLoop:
         # Cron tool (for scheduling)
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+
+        # Workspace tools (installed from Pack Store)
+        from nanobot.agent.tools.workspace import load_workspace_tools
+        loaded = load_workspace_tools(self.workspace, self.tools)
+        if loaded:
+            logger.info(f"Loaded {loaded} workspace tool(s)")
     
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
