@@ -21,6 +21,7 @@ class SkillsLoader:
     def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
+        self.workspace_agents = workspace / "agents"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
     
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
@@ -42,6 +43,14 @@ class SkillsLoader:
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+
+        # Agent skills (agents contain SKILL.md + tools/)
+        if self.workspace_agents.exists():
+            for agent_dir in self.workspace_agents.iterdir():
+                if agent_dir.is_dir():
+                    skill_file = agent_dir / "SKILL.md"
+                    if skill_file.exists() and not any(s["name"] == agent_dir.name for s in skills):
+                        skills.append({"name": agent_dir.name, "path": str(skill_file), "source": "agent"})
         
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
@@ -70,7 +79,12 @@ class SkillsLoader:
         workspace_skill = self.workspace_skills / name / "SKILL.md"
         if workspace_skill.exists():
             return workspace_skill.read_text(encoding="utf-8")
-        
+
+        # Check agents
+        agent_skill = self.workspace_agents / name / "SKILL.md"
+        if agent_skill.exists():
+            return agent_skill.read_text(encoding="utf-8")
+
         # Check built-in
         if self.builtin_skills:
             builtin_skill = self.builtin_skills / name / "SKILL.md"

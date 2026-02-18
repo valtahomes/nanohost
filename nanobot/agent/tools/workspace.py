@@ -80,23 +80,36 @@ class WorkspaceTool(Tool):
             return f"Error executing tool '{self._name}': {e}"
 
 
+def _scan_tool_dirs(base: Path) -> list[Path]:
+    """Return tool directories (containing tool.json) under base."""
+    if not base.exists():
+        return []
+    return sorted(
+        d for d in base.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and (d / "tool.json").exists()
+    )
+
+
 def load_workspace_tools(workspace: Path, registry: ToolRegistry) -> int:
-    """Scan workspace/tools/ for tool.json files and register them.
+    """Scan workspace/tools/ and workspace/agents/*/tools/ for tools.
 
     Returns number of workspace tools registered.
     """
-    tools_dir = workspace / "tools"
-    if not tools_dir.exists():
-        return 0
+    tool_dirs: list[Path] = []
+
+    # Standalone tools: workspace/tools/*/
+    tool_dirs.extend(_scan_tool_dirs(workspace / "tools"))
+
+    # Agent tools: workspace/agents/*/tools/*/
+    agents_dir = workspace / "agents"
+    if agents_dir.exists():
+        for agent_dir in sorted(agents_dir.iterdir()):
+            if agent_dir.is_dir() and not agent_dir.name.startswith("."):
+                tool_dirs.extend(_scan_tool_dirs(agent_dir / "tools"))
 
     count = 0
-    for tool_dir in sorted(tools_dir.iterdir()):
-        if not tool_dir.is_dir() or tool_dir.name.startswith("."):
-            continue
-
+    for tool_dir in tool_dirs:
         tool_json_path = tool_dir / "tool.json"
-        if not tool_json_path.exists():
-            continue
 
         try:
             definition = json.loads(tool_json_path.read_text(encoding="utf-8"))
