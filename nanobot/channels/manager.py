@@ -28,7 +28,8 @@ class ChannelManager:
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
-        
+        self._progress_ids: dict[str, str] = {}  # "channel:chat_id" -> message_id
+
         self._init_channels()
     
     def _init_channels(self) -> None:
@@ -185,23 +186,42 @@ class ChannelManager:
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""
         logger.info("Outbound dispatcher started")
-        
+
         while True:
             try:
                 msg = await asyncio.wait_for(
                     self.bus.consume_outbound(),
                     timeout=1.0
                 )
-                
+
                 channel = self.channels.get(msg.channel)
-                if channel:
-                    try:
-                        await channel.send(msg)
-                    except Exception as e:
-                        logger.error(f"Error sending to {msg.channel}: {e}")
-                else:
+                if not channel:
                     logger.warning(f"Unknown channel: {msg.channel}")
-                    
+                    continue
+
+                key = f"{msg.channel}:{msg.chat_id}"
+
+                try:
+                    if msg.progress:
+                        # Progress message: send new or edit existing
+                        existing_id = self._progress_ids.get(key)
+                        if existing_id:
+                            await channel.edit(msg.chat_id, existing_id, msg.content, msg.metadata)
+                        else:
+                            mid = await channel.send(msg)
+                            if mid:
+                                self._progress_ids[key] = mid
+                    else:
+                        # Final message: edit progress message or send new
+                        progress_id = self._progress_ids.pop(key, None)
+                        if progress_id:
+                            await channel.edit(msg.chat_id, progress_id, msg.content, msg.metadata)
+                        else:
+                            await channel.send(msg)
+                except Exception as e:
+                    logger.error(f"Error sending to {msg.channel}: {e}")
+                    self._progress_ids.pop(key, None)
+
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:

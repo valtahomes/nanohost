@@ -298,7 +298,17 @@ class AgentLoop:
                     timeout=1.0
                 )
                 try:
-                    response = await self._process_message(msg)
+                    # Build progress callback for channel messages
+                    async def _channel_progress(content: str, _msg=msg) -> None:
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=_msg.channel,
+                            chat_id=_msg.chat_id,
+                            content=content,
+                            metadata=_msg.metadata,
+                            progress=True,
+                        ))
+
+                    response = await self._process_message(msg, on_progress=_channel_progress)
                     if response:
                         await self.bus.publish_outbound(response)
                 except Exception as e:
@@ -385,14 +395,10 @@ class AgentLoop:
             chat_id=msg.chat_id,
         )
 
-        async def _bus_progress(content: str) -> None:
-            await self.bus.publish_outbound(OutboundMessage(
-                channel=msg.channel, chat_id=msg.chat_id, content=content,
-                metadata=msg.metadata or {},
-            ))
-
+        # on_progress is passed from run() for channel messages (edit-in-place)
+        # and from process_direct() for CLI (_cli_progress).
         final_content, tools_used, is_error = await self._run_agent_loop(
-            initial_messages, on_progress=on_progress or _bus_progress,
+            initial_messages, on_progress=on_progress,
         )
 
         if final_content is None:

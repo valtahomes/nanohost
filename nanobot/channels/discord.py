@@ -72,11 +72,11 @@ class DiscordChannel(BaseChannel):
             await self._http.aclose()
             self._http = None
 
-    async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Discord REST API."""
+    async def send(self, msg: OutboundMessage) -> str | None:
+        """Send a message through Discord REST API. Returns message_id."""
         if not self._http:
             logger.warning("Discord HTTP client not initialized")
-            return
+            return None
 
         url = f"{DISCORD_API_BASE}/channels/{msg.chat_id}/messages"
         payload: dict[str, Any] = {"content": msg.content}
@@ -98,7 +98,7 @@ class DiscordChannel(BaseChannel):
                         await asyncio.sleep(retry_after)
                         continue
                     response.raise_for_status()
-                    return
+                    return str(response.json().get("id", ""))
                 except Exception as e:
                     if attempt == 2:
                         logger.error(f"Error sending Discord message: {e}")
@@ -106,6 +106,19 @@ class DiscordChannel(BaseChannel):
                         await asyncio.sleep(1)
         finally:
             await self._stop_typing(msg.chat_id)
+        return None
+
+    async def edit(self, chat_id: str, message_id: str, content: str, metadata: dict | None = None) -> None:
+        """Edit a previously sent Discord message."""
+        if not self._http:
+            return
+        url = f"{DISCORD_API_BASE}/channels/{chat_id}/messages/{message_id}"
+        headers = {"Authorization": f"Bot {self.config.token}"}
+        try:
+            response = await self._http.patch(url, headers=headers, json={"content": content})
+            response.raise_for_status()
+        except Exception as e:
+            logger.warning(f"Discord edit failed: {e}")
 
     async def _gateway_loop(self) -> None:
         """Main gateway loop: identify, heartbeat, dispatch events."""

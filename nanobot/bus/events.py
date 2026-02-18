@@ -26,12 +26,14 @@ class InboundMessage:
 @dataclass
 class OutboundMessage:
     """Message to send to a chat channel."""
-    
+
     channel: str
     chat_id: str
     content: str
     reply_to: str | None = None
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    progress: bool = False  # True = intermediate progress message (tool hint)
+    edit_message_id: str | None = None  # If set, edit this message instead of sending new
 
 

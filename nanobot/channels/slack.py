@@ -73,24 +73,37 @@ class SlackChannel(BaseChannel):
                 logger.warning(f"Slack socket close failed: {e}")
             self._socket_client = None
 
-    async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Slack."""
+    async def send(self, msg: OutboundMessage) -> str | None:
+        """Send a message through Slack. Returns ts (timestamp) for later editing."""
         if not self._web_client:
             logger.warning("Slack client not running")
-            return
+            return None
         try:
             slack_meta = msg.metadata.get("slack", {}) if msg.metadata else {}
             thread_ts = slack_meta.get("thread_ts")
             channel_type = slack_meta.get("channel_type")
             # Only reply in thread for channel/group messages; DMs don't use threads
             use_thread = thread_ts and channel_type != "im"
-            await self._web_client.chat_postMessage(
+            result = await self._web_client.chat_postMessage(
                 channel=msg.chat_id,
                 text=self._to_mrkdwn(msg.content),
                 thread_ts=thread_ts if use_thread else None,
             )
+            return result.get("ts")
         except Exception as e:
             logger.error(f"Error sending Slack message: {e}")
+            return None
+
+    async def edit(self, chat_id: str, message_id: str, content: str, metadata: dict | None = None) -> None:
+        """Edit a previously sent Slack message."""
+        if not self._web_client:
+            return
+        try:
+            await self._web_client.chat_update(
+                channel=chat_id, ts=message_id, text=self._to_mrkdwn(content),
+            )
+        except Exception as e:
+            logger.warning(f"Slack edit failed: {e}")
 
     async def _on_socket_request(
         self,

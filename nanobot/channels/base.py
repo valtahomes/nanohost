@@ -49,13 +49,20 @@ class BaseChannel(ABC):
         pass
     
     @abstractmethod
-    async def send(self, msg: OutboundMessage) -> None:
+    async def send(self, msg: OutboundMessage) -> str | None:
         """
         Send a message through this channel.
-        
+
         Args:
             msg: The message to send.
+
+        Returns:
+            The platform message ID (for later editing), or None.
         """
+        pass
+
+    async def edit(self, chat_id: str, message_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
+        """Edit a previously sent message. Override in subclasses that support editing."""
         pass
     
     def is_allowed(self, sender_id: str) -> bool:

@@ -210,11 +210,11 @@ class TelegramChannel(BaseChannel):
             return "audio"
         return "document"
 
-    async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Telegram."""
+    async def send(self, msg: OutboundMessage) -> str | None:
+        """Send a message through Telegram. Returns message_id of the last sent text message."""
         if not self._app:
             logger.warning("Telegram bot not running")
-            return
+            return None
 
         self._stop_typing(msg.chat_id)
 
@@ -222,7 +222,9 @@ class TelegramChannel(BaseChannel):
             chat_id = int(msg.chat_id)
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
-            return
+            return None
+
+        last_message_id: str | None = None
 
         # Send media files
         for media_path in (msg.media or []):
@@ -246,13 +248,35 @@ class TelegramChannel(BaseChannel):
             for chunk in _split_message(msg.content):
                 try:
                     html = _markdown_to_telegram_html(chunk)
-                    await self._app.bot.send_message(chat_id=chat_id, text=html, parse_mode="HTML")
+                    sent = await self._app.bot.send_message(chat_id=chat_id, text=html, parse_mode="HTML")
+                    last_message_id = str(sent.message_id)
                 except Exception as e:
                     logger.warning(f"HTML parse failed, falling back to plain text: {e}")
                     try:
-                        await self._app.bot.send_message(chat_id=chat_id, text=chunk)
+                        sent = await self._app.bot.send_message(chat_id=chat_id, text=chunk)
+                        last_message_id = str(sent.message_id)
                     except Exception as e2:
                         logger.error(f"Error sending Telegram message: {e2}")
+
+        return last_message_id
+
+    async def edit(self, chat_id: str, message_id: str, content: str, metadata: dict | None = None) -> None:
+        """Edit a previously sent Telegram message."""
+        if not self._app:
+            return
+        try:
+            html = _markdown_to_telegram_html(content)
+            await self._app.bot.edit_message_text(
+                chat_id=int(chat_id), message_id=int(message_id),
+                text=html, parse_mode="HTML",
+            )
+        except Exception as e:
+            try:
+                await self._app.bot.edit_message_text(
+                    chat_id=int(chat_id), message_id=int(message_id), text=content,
+                )
+            except Exception as e2:
+                logger.warning(f"Telegram edit failed: {e2}")
     
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
