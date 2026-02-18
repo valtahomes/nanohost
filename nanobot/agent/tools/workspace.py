@@ -1,4 +1,4 @@
-"""Workspace tools: user-installed tools loaded from workspace/tools/."""
+"""Workspace tools: user-installed tools loaded from workspace/agents/*/tools/."""
 
 import asyncio
 import json
@@ -13,7 +13,7 @@ from nanobot.agent.tools.registry import ToolRegistry
 
 
 class WorkspaceTool(Tool):
-    """A tool loaded from workspace/tools/<slug>/tool.json + run.py.
+    """A tool loaded from workspace/agents/<slug>/tools/<tool>/tool.json + run.py.
 
     Execution: run.py is invoked as a subprocess with JSON params in sys.argv[1].
     stdout is the result, stderr + non-zero exit is an error.
@@ -91,14 +91,11 @@ def _scan_tool_dirs(base: Path) -> list[Path]:
 
 
 def load_workspace_tools(workspace: Path, registry: ToolRegistry) -> int:
-    """Scan workspace/tools/ and workspace/agents/*/tools/ for tools.
+    """Scan workspace/agents/*/tools/ for tools.
 
     Returns number of workspace tools registered.
     """
     tool_dirs: list[Path] = []
-
-    # Standalone tools: workspace/tools/*/
-    tool_dirs.extend(_scan_tool_dirs(workspace / "tools"))
 
     # Agent tools: workspace/agents/*/tools/*/
     agents_dir = workspace / "agents"
