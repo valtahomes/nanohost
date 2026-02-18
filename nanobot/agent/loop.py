@@ -488,8 +488,12 @@ Respond with ONLY valid JSON, no markdown fences."""
                 return
 
             if entry := result.get("history_entry"):
+                if not isinstance(entry, str):
+                    entry = json.dumps(entry, ensure_ascii=False)
                 memory.append_history(entry)
             if update := result.get("memory_update"):
+                if not isinstance(update, str):
+                    update = json.dumps(update, ensure_ascii=False)
                 if update != current_memory:
                     memory.write_long_term(update)
 
