@@ -126,6 +126,17 @@ class ChannelManager:
             except ImportError as e:
                 logger.warning(f"Slack channel not available: {e}")
 
+        # HTTP channel (desktop app)
+        if self.config.channels.http.enabled:
+            try:
+                from nanobot.channels.http import HTTPChannel
+                self.channels["http"] = HTTPChannel(
+                    self.config.channels.http, self.bus
+                )
+                logger.info("HTTP channel enabled")
+            except ImportError as e:
+                logger.warning(f"HTTP channel not available: {e}")
+
         # QQ channel
         if self.config.channels.qq.enabled:
             try:

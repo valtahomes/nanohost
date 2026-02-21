@@ -164,6 +164,14 @@ class QQConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
 
 
+class HTTPConfig(Base):
+    """HTTP channel configuration (desktop app chat via SSE)."""
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 18790
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -176,6 +184,7 @@ class ChannelsConfig(Base):
     email: EmailConfig = Field(default_factory=EmailConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
+    http: HTTPConfig = Field(default_factory=HTTPConfig)
 
 
 class AgentDefaults(Base):
