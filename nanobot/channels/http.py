@@ -68,11 +68,17 @@ class HTTPChannel(BaseChannel):
         logger.info("HTTP channel stopped")
 
     async def send(self, msg: OutboundMessage) -> str | None:
-        """Route outbound message to the pending request queue."""
+        """Route outbound message to the pending request queue.
+
+        Always returns None so ChannelManager doesn't track progress IDs.
+        For SSE, each progress/message is a separate event — no need to
+        "edit" a previous message. The msg.progress flag is preserved and
+        used in _handle_chat to determine the SSE event type.
+        """
         q = self._pending.get(msg.chat_id)
         if q:
             await q.put(msg)
-            return msg.chat_id
+            return None
         else:
             logger.warning(f"HTTP: no pending request for chat_id={msg.chat_id}")
             return None
