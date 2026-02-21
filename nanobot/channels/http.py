@@ -126,6 +126,7 @@ class HTTPChannel(BaseChannel):
 
         session_id = body.get("session_id", "").strip()
         message = body.get("message", "").strip()
+        model = body.get("model", "").strip() or None
 
         if not session_id:
             return web.json_response(
@@ -158,6 +159,7 @@ class HTTPChannel(BaseChannel):
             sender_id="desktop",
             chat_id=session_id,
             content=message,
+            metadata={"model": model} if model else {},
         )
 
         # Stream responses from queue

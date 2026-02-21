@@ -214,6 +214,7 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[[str], Awaitable[None]] | None = None,
+        model: str | None = None,
     ) -> tuple[str | None, list[str], bool]:
         """
         Run the agent iteration loop.
@@ -221,6 +222,7 @@ class AgentLoop:
         Args:
             initial_messages: Starting messages for the LLM conversation.
             on_progress: Optional callback to push intermediate content to the user.
+            model: Optional model override for this request.
 
         Returns:
             Tuple of (final_content, list_of_tools_used, is_error).
@@ -230,6 +232,7 @@ class AgentLoop:
         final_content = None
         tools_used: list[str] = []
         is_error = False
+        use_model = model or self.model
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -237,7 +240,7 @@ class AgentLoop:
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(),
-                model=self.model,
+                model=use_model,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
@@ -397,8 +400,9 @@ class AgentLoop:
 
         # on_progress is passed from run() for channel messages (edit-in-place)
         # and from process_direct() for CLI (_cli_progress).
+        model_override = (msg.metadata or {}).get("model")
         final_content, tools_used, is_error = await self._run_agent_loop(
-            initial_messages, on_progress=on_progress,
+            initial_messages, on_progress=on_progress, model=model_override,
         )
 
         if final_content is None:
