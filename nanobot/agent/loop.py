@@ -18,6 +18,7 @@ from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
+from nanobot.agent.tools.resolve import TickerResolverTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
@@ -130,6 +131,12 @@ class AgentLoop:
         # Web tools
         self.tools.register(WebSearchTool(api_key=self.brave_api_key, api_base=self.search_api_base))
         self.tools.register(WebFetchTool())
+
+        # Ticker resolver (Aho-Corasick trie + RapidFuzz, downloads SQLite dictionary)
+        self.tools.register(TickerResolverTool(
+            api_key=self.brave_api_key,
+            api_base=self.search_api_base,
+        ))
         
         # Message tool
         message_tool = MessageTool(send_callback=self.bus.publish_outbound)
