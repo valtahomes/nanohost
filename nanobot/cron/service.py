@@ -86,6 +86,9 @@ class CronService:
                             deliver=j["payload"].get("deliver", False),
                             channel=j["payload"].get("channel"),
                             to=j["payload"].get("to"),
+                            tool_name=j["payload"].get("toolName"),
+                            tool_args=j["payload"].get("toolArgs"),
+                            silent_marker=j["payload"].get("silentMarker"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -133,6 +136,9 @@ class CronService:
                         "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,
+                        "toolName": j.payload.tool_name,
+                        "toolArgs": j.payload.tool_args,
+                        "silentMarker": j.payload.silent_marker,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -264,27 +270,34 @@ class CronService:
         self,
         name: str,
         schedule: CronSchedule,
-        message: str,
+        message: str = "",
         deliver: bool = False,
         channel: str | None = None,
         to: str | None = None,
         delete_after_run: bool = False,
+        tool_name: str | None = None,
+        tool_args: str | None = None,
+        silent_marker: str | None = None,
     ) -> CronJob:
         """Add a new job."""
         store = self._load_store()
         now = _now_ms()
-        
+
+        payload_kind = "tool_call" if tool_name else "agent_turn"
         job = CronJob(
             id=str(uuid.uuid4())[:8],
             name=name,
             enabled=True,
             schedule=schedule,
             payload=CronPayload(
-                kind="agent_turn",
+                kind=payload_kind,
                 message=message,
                 deliver=deliver,
                 channel=channel,
                 to=to,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                silent_marker=silent_marker,
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,

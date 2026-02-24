@@ -7,11 +7,12 @@ description: Schedule reminders and recurring tasks.
 
 Use the `cron` tool to schedule reminders or recurring tasks.
 
-## Three Modes
+## Four Modes
 
 1. **Reminder** - message is sent directly to user
 2. **Task** - message is a task description, agent executes and sends result
 3. **One-time** - runs once at a specific time, then auto-deletes
+4. **Tool call** - directly executes a workspace tool (no LLM cost per run). Use for recurring checks like alerts.
 
 ## Examples
 
@@ -33,6 +34,15 @@ cron(action="add", message="Remind me about the meeting", at="<ISO datetime>")
 Timezone-aware cron:
 ```
 cron(action="add", message="Morning standup", cron_expr="0 9 * * 1-5", tz="America/Vancouver")
+```
+
+Direct tool call (zero LLM cost per check, only notifies when triggered):
+```
+cron(action="add",
+     tool_name="alert_check",
+     tool_args='{"tickers":["AAPL"],"conditions":{"rsi_above":70}}',
+     silent_marker="NO_ALERTS_TRIGGERED",
+     cron_expr="*/30 9-16 * * 1-5")
 ```
 
 List/remove:

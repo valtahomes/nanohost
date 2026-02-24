@@ -1,6 +1,7 @@
 """CLI commands for nanobot."""
 
 import asyncio
+import json
 import os
 import signal
 from pathlib import Path
@@ -336,6 +337,7 @@ def gateway(
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
+    from nanobot.notification import NotificationService
     
     if verbose:
         import logging
@@ -374,7 +376,45 @@ def gateway(
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
-        """Execute a cron job through the agent."""
+        """Execute a cron job. tool_call bypasses LLM; agent_turn goes through LLM."""
+        from nanobot.bus.events import OutboundMessage
+
+        if job.payload.kind == "tool_call" and job.payload.tool_name:
+            # Direct tool execution — no LLM cost
+            tool = agent.tools.get(job.payload.tool_name)
+            if not tool:
+                logger.error(f"Cron tool_call: tool '{job.payload.tool_name}' not found")
+                return None
+
+            try:
+                args = json.loads(job.payload.tool_args or "{}")
+            except json.JSONDecodeError:
+                args = {}
+
+            result = await tool.execute(**args)
+
+            # Silent check
+            if job.payload.silent_marker and job.payload.silent_marker in result:
+                logger.info(f"Cron tool_call silent: {job.name}")
+                return None
+
+            # Triggered — escalate through LLM for formatting
+            escalation = f"[Alert Result]\n{result}\n\nFormat this alert for the user. Be concise."
+            response = await agent.process_direct(
+                escalation,
+                session_key=f"cron:{job.id}",
+                channel=job.payload.channel or "cli",
+                chat_id=job.payload.to or "direct",
+            )
+            if job.payload.deliver and job.payload.to:
+                await bus.publish_outbound(OutboundMessage(
+                    channel=job.payload.channel or "cli",
+                    chat_id=job.payload.to,
+                    content=response or result,
+                ))
+            return response
+
+        # agent_turn — existing behavior
         response = await agent.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
@@ -382,7 +422,6 @@ def gateway(
             chat_id=job.payload.to or "direct",
         )
         if job.payload.deliver and job.payload.to:
-            from nanobot.bus.events import OutboundMessage
             await bus.publish_outbound(OutboundMessage(
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to,
@@ -403,6 +442,10 @@ def gateway(
         enabled=True
     )
     
+    # Create notification service (polls ~/.nanobot/notifications/ for async task results)
+    notifications = NotificationService(bus=bus)
+    agent.on_inbound = lambda msg: notifications.update_last_channel(msg.channel, msg.chat_id)
+
     # Create channel manager
     channels = ChannelManager(config, bus)
     
@@ -416,11 +459,13 @@ def gateway(
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
     
     console.print(f"[green]✓[/green] Heartbeat: every 30m")
+    console.print(f"[green]✓[/green] Notifications: polling every {notifications.interval_s}s")
     
     async def run():
         try:
             await cron.start()
             await heartbeat.start()
+            await notifications.start()
             await asyncio.gather(
                 agent.run(),
                 channels.start_all(),
@@ -429,6 +474,7 @@ def gateway(
             console.print("\nShutting down...")
         finally:
             await agent.close_mcp()
+            notifications.stop()
             heartbeat.stop()
             cron.stop()
             agent.stop()

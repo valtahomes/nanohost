@@ -26,7 +26,10 @@ class CronTool(Tool):
     
     @property
     def description(self) -> str:
-        return "Schedule reminders and recurring tasks. Actions: add, list, remove."
+        return (
+            "Schedule reminders, recurring tasks, or direct tool calls. Actions: add, list, remove. "
+            "Use tool_name for direct tool execution (no LLM cost per run)."
+        )
     
     @property
     def parameters(self) -> dict[str, Any]:
@@ -61,6 +64,18 @@ class CronTool(Tool):
                 "job_id": {
                     "type": "string",
                     "description": "Job ID (for remove)"
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "Workspace tool to execute directly, bypassing LLM (e.g. 'alert_check'). Use for recurring checks."
+                },
+                "tool_args": {
+                    "type": "string",
+                    "description": "JSON arguments for the tool (e.g. '{\"tickers\":[\"AAPL\"],\"conditions\":{\"rsi_above\":70}}')"
+                },
+                "silent_marker": {
+                    "type": "string",
+                    "description": "If tool output contains this string, suppress delivery (e.g. 'NO_ALERTS_TRIGGERED')"
                 }
             },
             "required": ["action"]
@@ -75,16 +90,20 @@ class CronTool(Tool):
         tz: str | None = None,
         at: str | None = None,
         job_id: str | None = None,
+        tool_name: str | None = None,
+        tool_args: str | None = None,
+        silent_marker: str | None = None,
         **kwargs: Any
     ) -> str:
         if action == "add":
-            return self._add_job(message, every_seconds, cron_expr, tz, at)
+            return self._add_job(message, every_seconds, cron_expr, tz, at,
+                                 tool_name, tool_args, silent_marker)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
             return self._remove_job(job_id)
         return f"Unknown action: {action}"
-    
+
     def _add_job(
         self,
         message: str,
@@ -92,9 +111,12 @@ class CronTool(Tool):
         cron_expr: str | None,
         tz: str | None,
         at: str | None,
+        tool_name: str | None = None,
+        tool_args: str | None = None,
+        silent_marker: str | None = None,
     ) -> str:
-        if not message:
-            return "Error: message is required for add"
+        if not message and not tool_name:
+            return "Error: either message or tool_name is required for add"
         if not self._channel or not self._chat_id:
             return "Error: no session context (channel/chat_id)"
         if tz and not cron_expr:
@@ -121,22 +143,32 @@ class CronTool(Tool):
         else:
             return "Error: either every_seconds, cron_expr, or at is required"
         
+        job_name = tool_name or message[:30]
         job = self._cron.add_job(
-            name=message[:30],
+            name=job_name,
             schedule=schedule,
             message=message,
             deliver=True,
             channel=self._channel,
             to=self._chat_id,
             delete_after_run=delete_after,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            silent_marker=silent_marker,
         )
-        return f"Created job '{job.name}' (id: {job.id})"
+        kind_label = "tool_call" if tool_name else "reminder"
+        return f"Created {kind_label} job '{job.name}' (id: {job.id})"
     
     def _list_jobs(self) -> str:
         jobs = self._cron.list_jobs()
         if not jobs:
             return "No scheduled jobs."
-        lines = [f"- {j.name} (id: {j.id}, {j.schedule.kind})" for j in jobs]
+        lines = []
+        for j in jobs:
+            if j.payload.kind == "tool_call":
+                lines.append(f"- [tool_call] {j.payload.tool_name} (id: {j.id}, {j.schedule.kind})")
+            else:
+                lines.append(f"- {j.name} (id: {j.id}, {j.schedule.kind})")
         return "Scheduled jobs:\n" + "\n".join(lines)
     
     def _remove_job(self, job_id: str | None) -> str:
