@@ -1,8 +1,8 @@
-"""Ticker resolver: GLiNER2 NER + dictionary lookup + RapidFuzz.
+"""Ticker + indicator resolver: Gemini NER + dictionary lookup + RapidFuzz.
 
 Primary pipeline (when NER API available):
-  Stage 0 (NER):   GLiNER2 extracts financial entities from text (semantic pre-filter)
-  Stage 1 (Dict):  O(1) dictionary lookup for extracted entities
+  Stage 0 (NER):   Gemini extracts financial entities + technical indicators from text
+  Stage 1 (Dict):  O(1) dictionary lookup for extracted entities (symbols + indicators)
   Stage 2 (Fuzzy): RapidFuzz catches typos in unresolved entities
   Stage 3 (LLM):   Candidates returned → calling LLM does semantic verification
 
@@ -12,8 +12,11 @@ Fallback pipeline (when NER API unavailable):
   Stage 3 (LLM):   Same as above
 
 The NER stage eliminates false positives like "cat"→CAT, "want"→WANT, "buy"→BUY
-by only extracting text that GLiNER2 identifies as financial entities.
-GLiNER2 runs as a cloud API (api.fastino.ai), proxied through Platform /api/v1/ner.
+by only extracting text that Gemini identifies as financial entities or indicators.
+Gemini NER runs via Platform /api/v1/ner (replaces GLiNER2).
+
+The trie includes 223 technical indicator names/aliases from kand-ext,
+enabling resolution of indicator references (e.g. "Chaikin oscillator" → adosc).
 """
 
 import json
@@ -51,6 +54,247 @@ _last_sync_check: float = 0  # last time we checked platform API for updates
 # NER circuit breaker state
 _ner_fail_count = 0
 _ner_cooldown_until = 0.0
+
+
+# ── Technical Indicator Dictionary (from kand-ext, 223 indicators) ────────────
+# Format: key → (display_name, [aliases])
+# Used for trie injection — enables resolving indicator names alongside tickers.
+
+_INDICATOR_NAMES: dict[str, tuple[str, list[str]]] = {
+    # ── Core Momentum ────────────────────────────────────────────────────────
+    "rsi": ("RSI", ["relative strength index"]),
+    "macd": ("MACD", ["moving average convergence divergence"]),
+    "mom": ("Momentum", ["momentum"]),
+    "roc": ("ROC", ["rate of change"]),
+    "rocp": ("ROCP", ["rate of change percentage"]),
+    "rocr": ("ROCR", ["rate of change ratio"]),
+    "rocr100": ("ROCR100", ["rate of change ratio 100"]),
+    "stoch": ("Stochastic", ["stochastic oscillator", "stochastic"]),
+    "stochf": ("Fast Stochastic", ["fast stochastic"]),
+    "stochrsi": ("StochRSI", ["stochastic rsi"]),
+    "willr": ("Williams %R", ["williams r", "williams %r"]),
+    "cmo": ("CMO", ["chande momentum oscillator"]),
+    "tsi": ("TSI", ["true strength index"]),
+    "ppo": ("PPO", ["percentage price oscillator"]),
+    "apo": ("APO", ["absolute price oscillator"]),
+    "crsi": ("Connors RSI", ["connors rsi"]),
+    "rsx": ("RSX", ["relative strength xtra"]),
+    "cfo": ("CFO", ["chande forecast oscillator"]),
+    "coppock": ("Coppock Curve", ["coppock curve", "coppock indicator"]),
+    "qqe": ("QQE", ["quantitative qualitative estimation"]),
+    "uo": ("Ultimate Oscillator", ["ultimate oscillator"]),
+    "dx": ("DX", ["directional movement"]),
+    "dpo": ("DPO", ["detrended price oscillator"]),
+    "bias": ("Bias", ["bias indicator"]),
+    "kst": ("KST", ["know sure thing"]),
+    "smi": ("SMI", ["stochastic momentum index"]),
+    # ── Moving Averages ──────────────────────────────────────────────────────
+    "sma": ("SMA", ["simple moving average"]),
+    "ema": ("EMA", ["exponential moving average"]),
+    "dema": ("DEMA", ["double exponential moving average"]),
+    "tema": ("TEMA", ["triple exponential moving average"]),
+    "wma": ("WMA", ["weighted moving average"]),
+    "hma": ("HMA", ["hull moving average"]),
+    "rma": ("RMA", ["wilder moving average", "wilder's moving average"]),
+    "alma": ("ALMA", ["arnaud legoux moving average"]),
+    "fwma": ("FWMA", ["fibonacci weighted moving average"]),
+    "hwma": ("HWMA", ["holt-winter moving average"]),
+    "jma": ("JMA", ["jurik moving average"]),
+    "kama": ("KAMA", ["kaufman adaptive moving average"]),
+    "ma": ("Moving Average", ["moving average"]),
+    "mcgd": ("McGinley Dynamic", ["mcginley dynamic"]),
+    "pwma": ("PWMA", ["pascal weighted moving average"]),
+    "sinwma": ("SINWMA", ["sine weighted moving average"]),
+    "smma": ("SMMA", ["smoothed moving average"]),
+    "swma": ("SWMA", ["symmetric weighted moving average"]),
+    "t3": ("Tillson T3", ["tillson t3", "t3 moving average"]),
+    "trima": ("TRIMA", ["triangular moving average"]),
+    "vidya": ("VIDYA", ["variable index dynamic average"]),
+    "vwma": ("VWMA", ["volume weighted moving average"]),
+    "zlma": ("ZLMA", ["zero lag moving average"]),
+    "linreg": ("Linear Regression", ["linear regression"]),
+    "ht_trendline": ("Hilbert Transform Trendline", ["hilbert trendline"]),
+    # ── Volatility ───────────────────────────────────────────────────────────
+    "atr": ("ATR", ["average true range"]),
+    "natr": ("NATR", ["normalized average true range"]),
+    "bbands": ("Bollinger Bands", ["bollinger bands", "bollinger", "bb"]),
+    "kc": ("Keltner Channel", ["keltner channel", "keltner"]),
+    "donchian": ("Donchian Channel", ["donchian channel"]),
+    "accbands": ("Acceleration Bands", ["acceleration bands"]),
+    "aberration": ("Aberration", ["aberration indicator"]),
+    "adr": ("ADR", ["average daily range"]),
+    "atrts": ("ATR Trailing Stop", ["atr trailing stop"]),
+    "chandelier_exit": ("Chandelier Exit", ["chandelier exit"]),
+    "hilo": ("Hi-Lo", ["hi-lo bands", "gann hi-lo"]),
+    "massi": ("Mass Index", ["mass index"]),
+    "trange": ("True Range", ["true range"]),
+    "ui": ("Ulcer Index", ["ulcer index"]),
+    "hwc": ("HWC", ["holt-winter channel"]),
+    "stddev": ("Standard Deviation", ["standard deviation", "std dev"]),
+    "var": ("Variance", ["variance"]),
+    # ── Trend ────────────────────────────────────────────────────────────────
+    "adx": ("ADX", ["average directional index", "directional movement index", "dmi"]),
+    "adxr": ("ADXR", ["adx rating", "average directional index rating"]),
+    "supertrend": ("Supertrend", ["supertrend indicator"]),
+    "sar": ("Parabolic SAR", ["parabolic sar", "psar", "parabolic stop and reverse"]),
+    "aroon": ("Aroon", ["aroon indicator"]),
+    "aroonosc": ("Aroon Oscillator", ["aroon oscillator"]),
+    "ichimoku": ("Ichimoku", ["ichimoku cloud", "ichimoku kinko hyo"]),
+    "cci": ("CCI", ["commodity channel index"]),
+    "plus_di": ("+DI", ["plus di", "positive di", "plus directional indicator"]),
+    "minus_di": ("-DI", ["minus di", "negative di", "minus directional indicator"]),
+    "plus_dm": ("+DM", ["plus dm", "plus directional movement"]),
+    "minus_dm": ("-DM", ["minus dm", "minus directional movement"]),
+    "chop": ("Choppiness Index", ["choppiness index", "choppiness"]),
+    "vortex": ("Vortex Indicator", ["vortex indicator"]),
+    "pmax": ("PMAX", ["profit maximizer"]),
+    "alphatrend": ("AlphaTrend", ["alpha trend"]),
+    "alligator": ("Alligator", ["williams alligator"]),
+    "kdj": ("KDJ", []),
+    "fisher": ("Fisher Transform", ["fisher transform"]),
+    "amat": ("AMAT", ["archer moving averages trends"]),
+    "cksp": ("CKSP", ["chande kroll stop"]),
+    "ttm_trend": ("TTM Trend", ["ttm trend"]),
+    "td_seq": ("TD Sequential", ["td sequential", "demark sequential"]),
+    "vhf": ("VHF", ["vertical horizontal filter"]),
+    "rwi": ("RWI", ["random walk index"]),
+    "trendflex": ("Trendflex", ["trendflex indicator"]),
+    "inertia": ("Inertia", ["inertia indicator"]),
+    "zigzag": ("Zigzag", ["zigzag indicator"]),
+    # ── Volume ───────────────────────────────────────────────────────────────
+    "obv": ("OBV", ["on balance volume", "on-balance volume"]),
+    "ad": ("A/D Line", ["accumulation distribution", "accumulation/distribution"]),
+    "adosc": ("Chaikin Oscillator", ["chaikin oscillator", "chaikin ad oscillator", "ad oscillator"]),
+    "cmf": ("CMF", ["chaikin money flow"]),
+    "mfi": ("MFI", ["money flow index"]),
+    "vwap": ("VWAP", ["volume weighted average price"]),
+    "efi": ("EFI", ["elder force index", "force index"]),
+    "nvi": ("NVI", ["negative volume index"]),
+    "pvi": ("PVI", ["positive volume index"]),
+    "pvt": ("PVT", ["price volume trend"]),
+    "kvo": ("KVO", ["klinger volume oscillator", "klinger oscillator"]),
+    "eom": ("EOM", ["ease of movement"]),
+    "vfi": ("VFI", ["volume flow indicator"]),
+    "aobv": ("AOBV", ["archer on balance volume"]),
+    "pvo": ("PVO", ["percentage volume oscillator"]),
+    "vwmacd": ("VWMACD", ["volume weighted macd"]),
+    "tsv": ("TSV", ["time segmented volume"]),
+    # ── Squeeze/Composite ────────────────────────────────────────────────────
+    "squeeze": ("TTM Squeeze", ["ttm squeeze", "squeeze momentum"]),
+    "squeeze_pro": ("Squeeze Pro", ["squeeze pro", "ttm squeeze pro"]),
+    # ── Oscillators ──────────────────────────────────────────────────────────
+    "ao": ("Awesome Oscillator", ["awesome oscillator"]),
+    "bop": ("Balance of Power", ["balance of power"]),
+    "trix": ("TRIX", ["triple exponential average"]),
+    "trixh": ("TRIX Histogram", ["trix histogram"]),
+    "stc": ("STC", ["schaff trend cycle"]),
+    "er": ("ER", ["efficiency ratio"]),
+    "eri": ("ERI", ["elder ray index"]),
+    "qstick": ("QStick", ["qstick indicator"]),
+    "slope": ("Slope", ["slope indicator", "linear slope"]),
+    "cg": ("CG", ["center of gravity"]),
+    "cti": ("CTI", ["correlation trend indicator"]),
+    "pgo": ("PGO", ["pretty good oscillator"]),
+    "tmo": ("TMO", ["true momentum oscillator"]),
+    # ── Price Transforms ─────────────────────────────────────────────────────
+    "medprice": ("Median Price", ["median price"]),
+    "midpoint": ("Midpoint", ["midpoint"]),
+    "midprice": ("Midprice", ["midpoint price"]),
+    "typprice": ("Typical Price", ["typical price"]),
+    "wclprice": ("Weighted Close Price", ["weighted close price"]),
+    "ha": ("Heikin-Ashi", ["heikin-ashi", "heikin ashi"]),
+    "pivots": ("Pivot Points", ["pivot points", "pivots"]),
+    # ── Other Indicators ─────────────────────────────────────────────────────
+    "brar": ("BRAR", ["brar indicator"]),
+    "ecl": ("Elder Chandelier", ["elder chandelier"]),
+    "vegas": ("Vegas Channel", ["vegas channel"]),
+    "drawdown": ("Drawdown", ["drawdown indicator"]),
+    "psl": ("PSL", ["psychological line"]),
+    "mmar": ("MMAR", ["moving median average range"]),
+    "exhc": ("EXHC", ["exhaustion candle"]),
+    "ebsw": ("EBSW", ["even better sinewave"]),
+    "dsp": ("DSP", ["digital signal processing"]),
+    "ssf": ("SSF", ["ehlers super smoother filter"]),
+    "ssf3": ("SSF3", ["ehlers super smoother filter 3-pole"]),
+    "reflex": ("Reflex", ["reflex indicator"]),
+    "thermo": ("Thermo", ["thermometer indicator"]),
+    "pdist": ("PDIST", ["price distance"]),
+    "pvol": ("PVOL", []),
+    "pvr": ("PVR", ["price volume rank"]),
+    "smc": ("SMC", ["smart money concept"]),
+    "po": ("PO", ["price oscillator"]),
+    "vhm": ("VHM", []),
+    "vp": ("VP", ["volume profile"]),
+    "lrsi": ("Laguerre RSI", ["laguerre rsi"]),
+    "mama": ("MAMA", ["mesa adaptive moving average"]),
+    "rvgi": ("RVGI", ["relative vigor index"]),
+    "rvi": ("RVI", ["relative volatility index"]),
+    "sum": ("Sum", []),
+    # ── Candlestick Patterns ─────────────────────────────────────────────────
+    "cdl_doji": ("Doji", ["doji", "doji candle"]),
+    "cdl_dragonfly_doji": ("Dragonfly Doji", ["dragonfly doji"]),
+    "cdl_gravestone_doji": ("Gravestone Doji", ["gravestone doji"]),
+    "cdl_hammer": ("Hammer", ["hammer candle", "hammer pattern"]),
+    "cdl_inverted_hammer": ("Inverted Hammer", ["inverted hammer"]),
+    "cdl_long_shadow": ("Long Shadow", ["long shadow candle"]),
+    "cdl_marubozu": ("Marubozu", ["marubozu candle"]),
+    "cdl_engulfing": ("Engulfing", ["engulfing pattern", "bullish engulfing", "bearish engulfing"]),
+    "cdl_morningstar": ("Morning Star", ["morning star", "morning star pattern"]),
+    "cdl_eveningstar": ("Evening Star", ["evening star", "evening star pattern"]),
+    "cdl_3whitesoldiers": ("Three White Soldiers", ["three white soldiers"]),
+    "cdl_3blackcrows": ("Three Black Crows", ["three black crows"]),
+    "cdl_harami": ("Harami", ["harami pattern"]),
+    "cdl_haramicross": ("Harami Cross", ["harami cross"]),
+    "cdl_darkcloudcover": ("Dark Cloud Cover", ["dark cloud cover"]),
+    "cdl_piercing": ("Piercing Pattern", ["piercing pattern", "piercing line"]),
+    "cdl_hangingman": ("Hanging Man", ["hanging man"]),
+    "cdl_shootingstar": ("Shooting Star", ["shooting star"]),
+    "cdl_spinningtop": ("Spinning Top", ["spinning top"]),
+    "cdl_2crows": ("Two Crows", ["two crows"]),
+    "cdl_3inside": ("Three Inside", ["three inside up", "three inside down"]),
+    "cdl_3linestrike": ("Three Line Strike", ["three line strike"]),
+    "cdl_3outside": ("Three Outside", ["three outside up", "three outside down"]),
+    "cdl_3starsinsouth": ("Three Stars in South", ["three stars in south"]),
+    "cdl_abandonedbaby": ("Abandoned Baby", ["abandoned baby"]),
+    "cdl_advanceblock": ("Advance Block", ["advance block"]),
+    "cdl_belthold": ("Belt Hold", ["belt hold"]),
+    "cdl_breakaway": ("Breakaway", ["breakaway pattern"]),
+    "cdl_closingmarubozu": ("Closing Marubozu", ["closing marubozu"]),
+    "cdl_concealbabyswall": ("Concealing Baby Swallow", ["concealing baby swallow"]),
+    "cdl_counterattack": ("Counterattack", ["counterattack pattern"]),
+    "cdl_dojistar": ("Doji Star", ["doji star"]),
+    "cdl_eveningdojistar": ("Evening Doji Star", ["evening doji star"]),
+    "cdl_gapsidesidewhite": ("Gap Side-by-Side White", ["gap side by side white"]),
+    "cdl_highwave": ("High Wave", ["high wave candle"]),
+    "cdl_hikkake": ("Hikkake", ["hikkake pattern"]),
+    "cdl_hikkakemod": ("Modified Hikkake", ["modified hikkake"]),
+    "cdl_homingpigeon": ("Homing Pigeon", ["homing pigeon"]),
+    "cdl_identical3crows": ("Identical Three Crows", ["identical three crows"]),
+    "cdl_inneck": ("In-Neck", ["in-neck pattern"]),
+    "cdl_kicking": ("Kicking", ["kicking pattern"]),
+    "cdl_kickingbylength": ("Kicking by Length", ["kicking by length"]),
+    "cdl_ladderbottom": ("Ladder Bottom", ["ladder bottom"]),
+    "cdl_longleggeddoji": ("Long-Legged Doji", ["long legged doji"]),
+    "cdl_longline": ("Long Line", ["long line candle"]),
+    "cdl_matchinglow": ("Matching Low", ["matching low"]),
+    "cdl_mathold": ("Mat Hold", ["mat hold"]),
+    "cdl_morningdojistar": ("Morning Doji Star", ["morning doji star"]),
+    "cdl_onneck": ("On-Neck", ["on-neck pattern"]),
+    "cdl_rickshawman": ("Rickshaw Man", ["rickshaw man"]),
+    "cdl_risefall3methods": ("Rising/Falling Three Methods", ["rising three methods", "falling three methods"]),
+    "cdl_separatinglines": ("Separating Lines", ["separating lines"]),
+    "cdl_shortline": ("Short Line", ["short line candle"]),
+    "cdl_stalledpattern": ("Stalled Pattern", ["stalled pattern"]),
+    "cdl_sticksandwich": ("Stick Sandwich", ["stick sandwich"]),
+    "cdl_takuri": ("Takuri", ["takuri"]),
+    "cdl_tasukigap": ("Tasuki Gap", ["tasuki gap"]),
+    "cdl_thrusting": ("Thrusting", ["thrusting pattern"]),
+    "cdl_tristar": ("Tri-Star", ["tri-star pattern"]),
+    "cdl_unique3river": ("Unique Three River", ["unique three river"]),
+    "cdl_upsidegap2crows": ("Upside Gap Two Crows", ["upside gap two crows"]),
+    "cdl_xsidegap3methods": ("Side-by-Side Gap Three Methods", ["side gap three methods"]),
+    "cdl_z": ("Z-Pattern", ["z-pattern"]),
+}
 
 
 # ── SQLite helpers ────────────────────────────────
@@ -288,6 +532,21 @@ def _build_automaton_from_db(db: sqlite3.Connection):
             if symbol in entries:
                 _add_pattern(alias_lower, entries[symbol], "alias_exact")
 
+    # ── Inject technical indicator names (223 from kand-ext) ──
+    for ind_key, (ind_display, ind_aliases) in _INDICATOR_NAMES.items():
+        ind_info = {"symbol": ind_key, "name": ind_display, "type": "technical_indicator"}
+        # Add the key itself (e.g., "rsi", "macd")
+        _add_pattern(ind_key, ind_info, "indicator_key")
+        # Add display name lowercased (e.g., "bollinger bands")
+        dn = ind_display.lower()
+        if len(dn) >= 3 and dn != ind_key:
+            _add_pattern(dn, ind_info, "indicator_name")
+        # Add aliases (e.g., "parabolic sar", "chaikin oscillator")
+        for alias in ind_aliases:
+            al = alias.lower()
+            if len(al) >= 3:
+                _add_pattern(al, ind_info, "indicator_alias")
+
     _dict_loaded = True
 
     # Build Aho-Corasick automaton
@@ -300,12 +559,15 @@ def _build_automaton_from_db(db: sqlite3.Connection):
 
     # Build fuzzy choices (names + aliases for rapidfuzz)
     # Only include patterns >= 3 chars (fuzzy on 1-2 char strings is meaningless)
+    # Skip indicator-only entries — exact trie + NER is sufficient for indicators
     _fuzzy_choices = []
     _fuzzy_map = {}
     for key, info_list in _pattern_map.items():
         if len(key) >= 3:
-            _fuzzy_choices.append(key)
-            _fuzzy_map[key] = info_list[0]  # first entry for fuzzy scoring
+            non_ind = [e for e in info_list if e.get("type") != "technical_indicator"]
+            if non_ind:
+                _fuzzy_choices.append(key)
+                _fuzzy_map[key] = non_ind[0]  # first non-indicator entry for fuzzy
 
 
 # ── Stage 1: Trie scan ───────────────────────────
@@ -790,10 +1052,12 @@ class TickerResolverTool(Tool):
 
     name = "resolve_tickers"
     description = (
-        "Resolve company names, asset names, abbreviations, and ambiguous text "
-        "to exact ticker symbols. Call this BEFORE stock_lookup, technical_indicators, "
-        "or any financial data tool when the user mentions names instead of tickers. "
-        "Returns candidates with confidence scores for verification."
+        "Resolve company names, asset names, abbreviations, technical indicator names, "
+        "and ambiguous text to exact ticker symbols or indicator keys. "
+        "Call this BEFORE stock_lookup, alert_check, or any financial data tool "
+        "when the user mentions names instead of tickers/indicator keys. "
+        "Returns candidates with confidence scores — type 'technical_indicator' "
+        "for indicators (e.g. 'Chaikin oscillator' → adosc), others for tickers."
     )
     parameters = {
         "type": "object",
@@ -853,10 +1117,11 @@ class TickerResolverTool(Tool):
         return json.dumps(
             {
                 "instruction": (
-                    "Below are ticker candidates extracted from the user's message. "
-                    "Review each candidate's context to determine if it refers to a financial asset. "
+                    "Below are ticker and indicator candidates extracted from the user's message. "
+                    "Review each candidate's context to determine if it refers to a financial asset or indicator. "
                     "Discard false positives (common words mistaken for tickers). "
                     "Use confirmed symbols for subsequent data API calls. "
+                    "Use confirmed indicators (type=technical_indicator) for alert_check technical conditions. "
                     "If unsure about a candidate, ask the user."
                 ),
                 "candidates": all_candidates,
