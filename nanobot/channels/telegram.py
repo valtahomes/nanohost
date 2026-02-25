@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 from loguru import logger
 from telegram import BotCommand, Update, ReplyParameters
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -15,71 +16,156 @@ from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import TelegramConfig
 
 
+def _display_width(s: str) -> int:
+    """Calculate display width accounting for wide characters (CJK, emoji)."""
+    w = 0
+    for ch in s:
+        w += 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+    return w
+
+
+def _ljust_wide(s: str, width: int) -> str:
+    """Left-justify string considering wide characters."""
+    return s + ' ' * max(0, width - _display_width(s))
+
+
 def _markdown_to_telegram_html(text: str) -> str:
     """
     Convert markdown to Telegram-safe HTML.
+
+    Telegram Bot API supports: <b>, <i>, <s>, <u>, <code>, <pre>, <a>,
+    <blockquote>, <tg-spoiler>. No <table>, <h1>-<h6>, <hr>, <div>, or CSS.
     """
     if not text:
         return ""
-    
-    # 1. Extract and protect code blocks (preserve content from other processing)
-    code_blocks: list[str] = []
+
+    # 1. Extract and protect code blocks (preserve language hint)
+    code_blocks: list[tuple[str, str]] = []
     def save_code_block(m: re.Match) -> str:
-        code_blocks.append(m.group(1))
+        lang = m.group(1) or ""
+        code = m.group(2)
+        code_blocks.append((lang, code))
         return f"\x00CB{len(code_blocks) - 1}\x00"
-    
-    text = re.sub(r'```[\w]*\n?([\s\S]*?)```', save_code_block, text)
-    
+    text = re.sub(r'```(\w*)\n?([\s\S]*?)```', save_code_block, text)
+
     # 2. Extract and protect inline code
     inline_codes: list[str] = []
     def save_inline_code(m: re.Match) -> str:
         inline_codes.append(m.group(1))
         return f"\x00IC{len(inline_codes) - 1}\x00"
-    
     text = re.sub(r'`([^`]+)`', save_inline_code, text)
-    
-    # 3. Headers # Title -> just the title text
-    text = re.sub(r'^#{1,6}\s+(.+)$', r'\1', text, flags=re.MULTILINE)
-    
-    # 4. Blockquotes > text -> just the text (before HTML escaping)
-    text = re.sub(r'^>\s*(.*)$', r'\1', text, flags=re.MULTILINE)
-    
-    # 5. Escape HTML special characters
+
+    # 3. Convert markdown tables to aligned text (wide-char aware)
+    tables: list[str] = []
+    def convert_table(m: re.Match) -> str:
+        lines = m.group(0).strip().split('\n')
+        rows = []
+        for line in lines:
+            clean_line = re.sub(r'\*\*(.+?)\*\*', r'\1', line)
+            cells = [c.strip() for c in clean_line.strip().strip('|').split('|')]
+            if cells and all(re.match(r'^:?-+:?$', c) for c in cells):
+                continue
+            rows.append(cells)
+        if not rows:
+            return m.group(0)
+        col_count = max(len(r) for r in rows)
+        widths = [0] * col_count
+        for r in rows:
+            for i, c in enumerate(r):
+                if i < col_count:
+                    widths[i] = max(widths[i], _display_width(c))
+        out = []
+        for ri, r in enumerate(rows):
+            parts = []
+            for i in range(col_count):
+                val = r[i] if i < len(r) else ''
+                parts.append(_ljust_wide(val, widths[i]))
+            out.append('  '.join(parts).rstrip())
+            if ri == 0 and len(rows) > 1:
+                out.append('  '.join('-' * w for w in widths))
+        table_text = '\n'.join(out)
+        tables.append(table_text)
+        return f"\x00TBL{len(tables) - 1}\x00"
+    text = re.sub(r'(?:^\|.+\|[ \t]*$\n?)+', convert_table, text, flags=re.MULTILINE)
+
+    # 4. Horizontal rules (--- or *** or ___) -> blank line
+    text = re.sub(r'^[\s]*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+
+    # 5. Headers — differentiate levels (process longest prefix first)
+    text = re.sub(r'^#{5,6}\s+(.+?)\s*$', lambda m: f'\x00IT{m.group(1)}\x00IT', text, flags=re.MULTILINE)
+    text = re.sub(r'^#{3,4}\s+(.+?)\s*$', lambda m: f'\x00BD{m.group(1)}\x00BD', text, flags=re.MULTILINE)
+    text = re.sub(r'^##(?!#)\s+(.+?)\s*$', lambda m: f'\n\x00BD{m.group(1)}\x00BD', text, flags=re.MULTILINE)
+    text = re.sub(r'^#(?!#)\s+(.+?)\s*$', lambda m: f'\n\x00BU{m.group(1)}\x00BU', text, flags=re.MULTILINE)
+
+    # 6. Blockquotes > text -> native <blockquote> (Bot API 7.0+)
+    def convert_blockquote(m: re.Match) -> str:
+        lines = m.group(0).strip().split('\n')
+        content = '\n'.join(re.sub(r'^>\s?', '', line) for line in lines)
+        return f'\x00BQSTART\x00{content}\x00BQEND\x00'
+    text = re.sub(r'(?:^>.*$\n?)+', convert_blockquote, text, flags=re.MULTILINE)
+
+    # 7. Escape HTML special characters
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    
-    # 6. Links [text](url) - must be before bold/italic to handle nested cases
+
+    # 8. Links [text](url)
     text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
-    
-    # 7. Bold **text** or __text__
-    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+
+    # 9. Bold **text** or __text__ (allow trailing whitespace before closing **)
+    text = re.sub(r'\*\*(.+?)\s*\*\*', r'<b>\1</b>', text)
     text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
-    
-    # 8. Italic _text_ (avoid matching inside words like some_var_name)
+
+    # 10. Italic _text_
     text = re.sub(r'(?<![a-zA-Z0-9])_([^_]+)_(?![a-zA-Z0-9])', r'<i>\1</i>', text)
-    
-    # 9. Strikethrough ~~text~~
+
+    # 11. Strikethrough ~~text~~
     text = re.sub(r'~~(.+?)~~', r'<s>\1</s>', text)
-    
-    # 10. Bullet lists - item -> • item
-    text = re.sub(r'^[-*]\s+', '• ', text, flags=re.MULTILINE)
-    
-    # 11. Restore inline code with HTML tags
+
+    # 12. Bullet lists — nested levels with different symbols
+    def convert_bullet(m: re.Match) -> str:
+        indent = m.group(1)
+        level = len(indent) // 2
+        bullets = ['•', '◦', '▪']
+        return f"{indent}{bullets[min(level, len(bullets) - 1)]} "
+    text = re.sub(r'^( *)[-*]\s+', convert_bullet, text, flags=re.MULTILINE)
+
+    # 13. Numbered lists: keep as-is (Telegram renders plain numbers fine)
+
+    # 14. Collapse 3+ consecutive blank lines into 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # 15. Restore header placeholders
+    text = re.sub(r'\x00BU(.+?)\x00BU', r'<b><u>\1</u></b>', text)
+    text = re.sub(r'\x00BD(.+?)\x00BD', r'<b>\1</b>', text)
+    text = re.sub(r'\x00IT(.+?)\x00IT', r'<i>\1</i>', text)
+
+    # 16. Restore blockquote placeholders
+    text = text.replace('\x00BQSTART\x00', '<blockquote>')
+    text = text.replace('\x00BQEND\x00', '</blockquote>')
+
+    # 17. Restore inline code
     for i, code in enumerate(inline_codes):
-        # Escape HTML in code content
         escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         text = text.replace(f"\x00IC{i}\x00", f"<code>{escaped}</code>")
-    
-    # 12. Restore code blocks with HTML tags
-    for i, code in enumerate(code_blocks):
-        # Escape HTML in code content
+
+    # 18. Restore code blocks (with language hint if available)
+    for i, (lang, code) in enumerate(code_blocks):
         escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        text = text.replace(f"\x00CB{i}\x00", f"<pre><code>{escaped}</code></pre>")
-    
+        if lang:
+            tag = f'<pre><code class="language-{lang}">{escaped}</code></pre>'
+        else:
+            tag = f"<pre>{escaped}</pre>"
+        text = text.replace(f"\x00CB{i}\x00", tag)
+
+    # 19. Restore tables as <pre> blocks (monospace for alignment)
+    for i, tbl in enumerate(tables):
+        escaped = tbl.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        text = text.replace(f"\x00TBL{i}\x00", f"<pre>{escaped}</pre>")
+
     return text
 
 
 def _split_message(content: str, max_len: int = 4000) -> list[str]:
-    """Split content into chunks within max_len, preferring line breaks."""
+    """Split content into chunks, preferring paragraph breaks. Avoids splitting tables."""
     if len(content) <= max_len:
         return [content]
     chunks: list[str] = []
@@ -88,13 +174,22 @@ def _split_message(content: str, max_len: int = 4000) -> list[str]:
             chunks.append(content)
             break
         cut = content[:max_len]
-        pos = cut.rfind('\n')
+        # Prefer paragraph break, then line break, then space
+        pos = cut.rfind('\n\n')
+        if pos == -1:
+            pos = cut.rfind('\n')
         if pos == -1:
             pos = cut.rfind(' ')
         if pos == -1:
             pos = max_len
+        # Avoid splitting inside a table (lines starting with |)
+        remaining = content[pos:].lstrip('\n')
+        if remaining.startswith('|'):
+            earlier = cut[:pos].rfind('\n\n')
+            if earlier > 0:
+                pos = earlier
         chunks.append(content[:pos])
-        content = content[pos:].lstrip()
+        content = content[pos:].lstrip('\n')
     return chunks
 
 

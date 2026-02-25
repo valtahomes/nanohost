@@ -53,15 +53,49 @@ For example, the "weather" skill teaches you to use `exec` with `curl wttr.in` o
 
         return "\n\n---\n\n".join(parts)
     
+    @staticmethod
+    def _market_session() -> tuple[str, str]:
+        """Return (ET datetime string, market session status)."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        et = datetime.now(ZoneInfo("America/New_York"))
+        et_str = et.strftime("%Y-%m-%d %H:%M (%A)")
+        weekday = et.weekday()  # 0=Mon, 6=Sun
+        h, m = et.hour, et.minute
+        t = h * 60 + m  # minutes since midnight
+        if weekday >= 5:
+            session = "Closed (Weekend)"
+        elif t < 240:       # before 4:00
+            session = "Closed"
+        elif t < 570:       # 4:00 – 9:30
+            session = "Pre-Market"
+        elif t < 960:       # 9:30 – 16:00
+            session = "Market Hours"
+        elif t < 1200:      # 16:00 – 20:00
+            session = "After-Hours"
+        else:
+            session = "Closed"
+        return et_str, session
+
     def _get_identity(self) -> str:
         """Get the core identity section."""
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-        
+        et_str, market_session = self._market_session()
+
         return f"""# nanobot 🐈
 
-You are nanobot, a helpful AI assistant.
+You are nanobot, a helpful AI assistant. You have access to tools that allow you to:
+- Read, write, and edit files
+- Execute shell commands
+- Search the web and fetch web pages
+- Send messages to users on chat channels
+- Spawn subagents for complex background tasks
+
+## Current Time
+{et_str} (US Eastern)
+US Market: {market_session}
 
 ## Runtime
 {runtime}
@@ -81,7 +115,8 @@ Your workspace is at: {workspace_path}
 
 ## Response Rules
 
-- **Be extremely concise.** 2-3 sentences for simple questions. No filler, no preamble.
+- **Be concise for simple Q&A.** 2-3 sentences for simple questions. No filler, no preamble.
+- **But present data in full.** When a tool returns a numbered list or multiple items, you MUST output every single item. Never truncate, summarize, or cherry-pick from tool results.
 - **Never show your reasoning.** No "The user asked...", "I should...", "I will...", "Let me...". Just give the answer directly.
 - **No recap sections.** No "Summary of Actions", "Next Steps", "Here's what I did". The user can see what you did.
 - **Include key data in your reply.** Numbers, prices, temperatures — the actual useful information, not meta-commentary about it.

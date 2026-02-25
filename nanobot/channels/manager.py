@@ -29,6 +29,7 @@ class ChannelManager:
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
         self._progress_ids: dict[str, str] = {}  # "channel:chat_id" -> message_id
+        self._animation_tasks: dict[str, asyncio.Task] = {}  # "channel:chat_id" -> animation task
 
         self._init_channels()
     
@@ -194,6 +195,27 @@ class ChannelManager:
             except Exception as e:
                 logger.error("Error stopping {}: {}", name, e)
     
+    async def _animate_thinking(self, channel: BaseChannel, chat_id: str, message_id: str, metadata: dict | None) -> None:
+        """Animate thinking dots on a progress message."""
+        frames = ["💭", "💭.", "💭..", "💭..."]
+        i = 0
+        try:
+            while True:
+                await asyncio.sleep(0.8)
+                i = (i + 1) % len(frames)
+                try:
+                    await channel.edit(chat_id, message_id, frames[i], metadata)
+                except Exception:
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    def _stop_animation(self, key: str) -> None:
+        """Cancel the animation task for a key if running."""
+        task = self._animation_tasks.pop(key, None)
+        if task and not task.done():
+            task.cancel()
+
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""
         logger.info("Outbound dispatcher started")
@@ -221,16 +243,25 @@ class ChannelManager:
 
                 try:
                     if msg.progress:
-                        # Progress message: send new or edit existing
-                        existing_id = self._progress_ids.get(key)
-                        if existing_id:
-                            await channel.edit(msg.chat_id, existing_id, msg.content, msg.metadata)
-                        else:
-                            mid = await channel.send(msg)
+                        # Progress: send "💭" and start dot animation
+                        if key not in self._progress_ids:
+                            progress_msg = OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="💭",
+                                metadata=msg.metadata,
+                                progress=True,
+                            )
+                            mid = await channel.send(progress_msg)
                             if mid:
                                 self._progress_ids[key] = mid
+                                self._animation_tasks[key] = asyncio.create_task(
+                                    self._animate_thinking(channel, msg.chat_id, mid, msg.metadata)
+                                )
+                        # If already animating, just let it continue
                     else:
-                        # Final message: edit progress message or send new
+                        # Final message: stop animation, edit or send
+                        self._stop_animation(key)
                         progress_id = self._progress_ids.pop(key, None)
                         if progress_id:
                             await channel.edit(msg.chat_id, progress_id, msg.content, msg.metadata)
@@ -238,12 +269,16 @@ class ChannelManager:
                             await channel.send(msg)
                 except Exception as e:
                     logger.error("Error sending to {}: {}", msg.channel, e)
+                    self._stop_animation(key)
                     self._progress_ids.pop(key, None)
 
 
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
+                # Clean up all animation tasks
+                for k in list(self._animation_tasks):
+                    self._stop_animation(k)
                 break
     
     def get_channel(self, name: str) -> BaseChannel | None:

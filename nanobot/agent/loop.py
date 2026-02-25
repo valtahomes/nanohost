@@ -123,6 +123,7 @@ class AgentLoop:
         self._consolidation_locks: dict[str, asyncio.Lock] = {}
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._processing_lock = asyncio.Lock()
+        self.on_inbound: Callable[[InboundMessage], None] | None = None
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
@@ -360,6 +361,12 @@ class AgentLoop:
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
+        # Notify listener of inbound message (e.g. notification service)
+        if self.on_inbound and msg.channel != "system":
+            try:
+                self.on_inbound(msg)
+            except Exception:
+                pass
         async with self._processing_lock:
             try:
                 response = await self._process_message(msg)
