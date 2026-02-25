@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import time
 from pathlib import Path
 import select
 import sys
@@ -415,6 +416,21 @@ def gateway(
             if job.payload.silent_marker and job.payload.silent_marker in result:
                 logger.info(f"Cron tool_call silent: {job.name}")
                 return None
+
+            # Throttle check — prevent flooding for repeated triggers
+            mode = job.payload.trigger_mode or "every"
+            if mode == "once" and job.payload.last_triggered_at_ms:
+                logger.info(f"Cron throttle: '{job.name}' already triggered (once mode), skipping")
+                return None
+            if mode == "cooldown" and job.payload.last_triggered_at_ms:
+                cooldown = job.payload.cooldown_ms or 14400000  # default 4h
+                elapsed = int(time.time() * 1000) - job.payload.last_triggered_at_ms
+                if elapsed < cooldown:
+                    logger.info(f"Cron throttle: '{job.name}' in cooldown ({elapsed/3600000:.1f}h < {cooldown/3600000:.1f}h)")
+                    return None
+            if mode in ("once", "cooldown"):
+                job.payload.last_triggered_at_ms = int(time.time() * 1000)
+                cron._save_store()
 
             # Triggered — escalate through LLM for formatting
             escalation = f"[Alert Result]\n{result}\n\nFormat this alert for the user. Be concise."

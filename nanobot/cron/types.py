@@ -34,6 +34,10 @@ class CronPayload:
     # Multi-target delivery (overrides channel/to when present)
     # Each entry: {"channel": "telegram", "to": "123"} or {"channel": "email", "to": "user@x.com"}
     deliver_targets: list[dict] | None = None
+    # Trigger throttling
+    trigger_mode: str | None = None       # "once" | "cooldown" | "every" (default: "every" for compat)
+    cooldown_ms: int | None = None        # cooldown interval in ms (only when trigger_mode="cooldown")
+    last_triggered_at_ms: int | None = None  # timestamp of last successful trigger
 
 
 @dataclass

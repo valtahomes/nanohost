@@ -104,6 +104,9 @@ class CronService:
                             tool_args=j["payload"].get("toolArgs"),
                             silent_marker=j["payload"].get("silentMarker"),
                             deliver_targets=j["payload"].get("deliverTargets"),
+                            trigger_mode=j["payload"].get("triggerMode"),
+                            cooldown_ms=j["payload"].get("cooldownMs"),
+                            last_triggered_at_ms=j["payload"].get("lastTriggeredAtMs"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -155,6 +158,9 @@ class CronService:
                         "toolArgs": j.payload.tool_args,
                         "silentMarker": j.payload.silent_marker,
                         "deliverTargets": j.payload.deliver_targets,
+                        "triggerMode": j.payload.trigger_mode,
+                        "cooldownMs": j.payload.cooldown_ms,
+                        "lastTriggeredAtMs": j.payload.last_triggered_at_ms,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -295,6 +301,8 @@ class CronService:
         tool_args: str | None = None,
         silent_marker: str | None = None,
         deliver_targets: list[dict] | None = None,
+        trigger_mode: str | None = None,
+        cooldown_ms: int | None = None,
     ) -> CronJob:
         """Add a new job."""
         store = self._load_store()
@@ -317,6 +325,8 @@ class CronService:
                 tool_args=tool_args,
                 silent_marker=silent_marker,
                 deliver_targets=deliver_targets,
+                trigger_mode=trigger_mode,
+                cooldown_ms=cooldown_ms,
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,

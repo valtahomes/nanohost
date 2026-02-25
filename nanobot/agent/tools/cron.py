@@ -81,6 +81,15 @@ class CronTool(Tool):
                 "deliver_targets": {
                     "type": "string",
                     "description": "JSON array of delivery targets, e.g. [{\"channel\":\"telegram\"},{\"channel\":\"email\",\"to\":\"user@email.com\"}]. Omit 'to' for messaging channels (auto-resolved from session history)."
+                },
+                "trigger_mode": {
+                    "type": "string",
+                    "enum": ["once", "cooldown", "every"],
+                    "description": "How to handle repeated triggers. 'once': fire then auto-pause. 'cooldown': wait cooldown_hours between triggers. 'every': fire every time (default)."
+                },
+                "cooldown_hours": {
+                    "type": "number",
+                    "description": "Hours between triggers when trigger_mode='cooldown' (e.g. 4 for 4-hour cooldown). Default: 4."
                 }
             },
             "required": ["action"]
@@ -99,11 +108,14 @@ class CronTool(Tool):
         tool_args: str | None = None,
         silent_marker: str | None = None,
         deliver_targets: str | None = None,
+        trigger_mode: str | None = None,
+        cooldown_hours: float | None = None,
         **kwargs: Any
     ) -> str:
         if action == "add":
             return self._add_job(message, every_seconds, cron_expr, tz, at,
-                                 tool_name, tool_args, silent_marker, deliver_targets)
+                                 tool_name, tool_args, silent_marker, deliver_targets,
+                                 trigger_mode, cooldown_hours)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -121,6 +133,8 @@ class CronTool(Tool):
         tool_args: str | None = None,
         silent_marker: str | None = None,
         deliver_targets: str | None = None,
+        trigger_mode: str | None = None,
+        cooldown_hours: float | None = None,
     ) -> str:
         if not message and not tool_name:
             return "Error: either message or tool_name is required for add"
@@ -144,6 +158,13 @@ class CronTool(Tool):
         # Require either session context or explicit deliver_targets
         if not parsed_targets and (not self._channel or not self._chat_id):
             return "Error: no session context (channel/chat_id) and no deliver_targets"
+        # Validate trigger_mode
+        if trigger_mode and trigger_mode not in ("once", "cooldown", "every"):
+            return f"Error: trigger_mode must be 'once', 'cooldown', or 'every'"
+        cooldown_ms = None
+        if trigger_mode == "cooldown":
+            hours = cooldown_hours if cooldown_hours is not None else 4
+            cooldown_ms = int(hours * 3600000)
         if tz and not cron_expr:
             return "Error: tz can only be used with cron_expr"
         if tz:
@@ -181,6 +202,8 @@ class CronTool(Tool):
             tool_args=tool_args,
             silent_marker=silent_marker,
             deliver_targets=parsed_targets,
+            trigger_mode=trigger_mode,
+            cooldown_ms=cooldown_ms,
         )
         kind_label = "tool_call" if tool_name else "reminder"
         return f"Created {kind_label} job '{job.name}' (id: {job.id})"
