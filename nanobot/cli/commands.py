@@ -393,6 +393,11 @@ def gateway(
 
             result = await tool.execute(**args)
 
+            # Error check — don't escalate tool errors to LLM
+            if result.startswith("Error"):
+                logger.warning(f"Cron tool_call error: {job.name}: {result[:200]}")
+                return None
+
             # Silent check
             if job.payload.silent_marker and job.payload.silent_marker in result:
                 logger.info(f"Cron tool_call silent: {job.name}")

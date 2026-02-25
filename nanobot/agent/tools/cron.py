@@ -1,5 +1,6 @@
 """Cron tool for scheduling reminders and tasks."""
 
+import json
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
@@ -117,6 +118,11 @@ class CronTool(Tool):
     ) -> str:
         if not message and not tool_name:
             return "Error: either message or tool_name is required for add"
+        if tool_args:
+            try:
+                json.loads(tool_args)
+            except json.JSONDecodeError:
+                return "Error: tool_args must be valid JSON"
         if not self._channel or not self._chat_id:
             return "Error: no session context (channel/chat_id)"
         if tz and not cron_expr:
