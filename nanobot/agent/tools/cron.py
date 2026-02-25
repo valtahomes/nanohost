@@ -129,15 +129,18 @@ class CronTool(Tool):
                 json.loads(tool_args)
             except json.JSONDecodeError:
                 return "Error: tool_args must be valid JSON"
-        # Parse deliver_targets JSON
+        # Parse deliver_targets (LLM may pass str or list)
         parsed_targets = None
         if deliver_targets:
-            try:
-                parsed_targets = json.loads(deliver_targets)
-                if not isinstance(parsed_targets, list):
-                    return "Error: deliver_targets must be a JSON array"
-            except json.JSONDecodeError:
-                return "Error: deliver_targets must be valid JSON"
+            if isinstance(deliver_targets, list):
+                parsed_targets = deliver_targets
+            else:
+                try:
+                    parsed_targets = json.loads(deliver_targets)
+                    if not isinstance(parsed_targets, list):
+                        return "Error: deliver_targets must be a JSON array"
+                except (json.JSONDecodeError, TypeError):
+                    return "Error: deliver_targets must be valid JSON"
         # Require either session context or explicit deliver_targets
         if not parsed_targets and (not self._channel or not self._chat_id):
             return "Error: no session context (channel/chat_id) and no deliver_targets"

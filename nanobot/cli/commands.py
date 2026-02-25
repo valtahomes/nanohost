@@ -330,11 +330,15 @@ def gateway(
 
     def _resolve_chat_id(channel: str) -> str | None:
         """Find most recent chat_id for a channel from session files."""
+        matches = []
         for p in session_manager.sessions_dir.glob("*.jsonl"):
             name = p.stem  # e.g. "telegram_123456"
             if name.startswith(f"{channel}_"):
-                return name[len(channel) + 1:]
-        return None
+                matches.append((p.stat().st_mtime, name[len(channel) + 1:]))
+        if not matches:
+            return None
+        matches.sort(reverse=True)  # most recently modified first
+        return matches[0][1]
 
     async def _send_email(to: str, subject: str, body: str) -> None:
         """Send email via platform Resend API."""
