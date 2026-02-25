@@ -89,6 +89,7 @@ class CronService:
                             tool_name=j["payload"].get("toolName"),
                             tool_args=j["payload"].get("toolArgs"),
                             silent_marker=j["payload"].get("silentMarker"),
+                            deliver_targets=j["payload"].get("deliverTargets"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -139,6 +140,7 @@ class CronService:
                         "toolName": j.payload.tool_name,
                         "toolArgs": j.payload.tool_args,
                         "silentMarker": j.payload.silent_marker,
+                        "deliverTargets": j.payload.deliver_targets,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -278,6 +280,7 @@ class CronService:
         tool_name: str | None = None,
         tool_args: str | None = None,
         silent_marker: str | None = None,
+        deliver_targets: list[dict] | None = None,
     ) -> CronJob:
         """Add a new job."""
         store = self._load_store()
@@ -298,6 +301,7 @@ class CronService:
                 tool_name=tool_name,
                 tool_args=tool_args,
                 silent_marker=silent_marker,
+                deliver_targets=deliver_targets,
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,

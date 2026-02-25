@@ -374,10 +374,67 @@ def gateway(
         usage_reporting=config.usage_reporting if config.usage_reporting.endpoint else None,
     )
 
+    # ── Cron helpers ──────────────────────────────────────────────
+
+    def _resolve_chat_id(channel: str) -> str | None:
+        """Find most recent chat_id for a channel from session files."""
+        for p in session_manager.sessions_dir.glob("*.jsonl"):
+            name = p.stem  # e.g. "telegram_123456"
+            if name.startswith(f"{channel}_"):
+                return name[len(channel) + 1:]
+        return None
+
+    async def _send_email(to: str, subject: str, body: str) -> None:
+        """Send email via platform Resend API."""
+        import urllib.request
+        token = os.environ.get("WAYWAY_TOKEN", "")
+        api_base = os.environ.get("WAYWAY_API_BASE", "")
+        if not token or not api_base:
+            logger.warning("Cron email: missing WAYWAY_TOKEN/API_BASE")
+            return
+        url = f"{api_base}/api/v1/email/send"
+        data = json.dumps({"to": to, "subject": subject, "body": body}).encode()
+        req = urllib.request.Request(url, data=data, headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        })
+        try:
+            await asyncio.to_thread(urllib.request.urlopen, req, timeout=15)
+            logger.info(f"Cron email sent to {to}")
+        except Exception as e:
+            logger.error(f"Cron email failed: {e}")
+
+    async def _deliver_to_targets(job: CronJob, content: str) -> None:
+        """Deliver content to all configured targets for a job."""
+        from nanobot.bus.events import OutboundMessage
+
+        targets = job.payload.deliver_targets or []
+        if not targets and job.payload.channel and job.payload.to:
+            targets = [{"channel": job.payload.channel, "to": job.payload.to}]
+
+        for t in targets:
+            ch = t.get("channel", "cli")
+            to = t.get("to")
+
+            # Auto-resolve chat_id for messaging channels from session files
+            if not to and ch in ("telegram", "discord", "slack"):
+                to = _resolve_chat_id(ch)
+                if not to:
+                    logger.warning(f"Cron: no known chat_id for '{ch}', skipping")
+                    continue
+
+            if ch == "email" and to:
+                await _send_email(to, f"Alert: {job.name}", content)
+            elif to:
+                await bus.publish_outbound(OutboundMessage(
+                    channel=ch, chat_id=to, content=content,
+                ))
+
+    # ── Cron callback ──────────────────────────────────────────
+
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job. tool_call bypasses LLM; agent_turn goes through LLM."""
-        from nanobot.bus.events import OutboundMessage
 
         if job.payload.kind == "tool_call" and job.payload.tool_name:
             # Direct tool execution — no LLM cost
@@ -411,12 +468,8 @@ def gateway(
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to or "direct",
             )
-            if job.payload.deliver and job.payload.to:
-                await bus.publish_outbound(OutboundMessage(
-                    channel=job.payload.channel or "cli",
-                    chat_id=job.payload.to,
-                    content=response or result,
-                ))
+            if job.payload.deliver:
+                await _deliver_to_targets(job, response or result)
             return response
 
         # agent_turn — existing behavior
@@ -426,12 +479,8 @@ def gateway(
             channel=job.payload.channel or "cli",
             chat_id=job.payload.to or "direct",
         )
-        if job.payload.deliver and job.payload.to:
-            await bus.publish_outbound(OutboundMessage(
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to,
-                content=response or ""
-            ))
+        if job.payload.deliver:
+            await _deliver_to_targets(job, response or "")
         return response
     cron.on_job = on_cron_job
     

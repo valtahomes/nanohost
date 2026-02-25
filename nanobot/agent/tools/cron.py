@@ -77,6 +77,10 @@ class CronTool(Tool):
                 "silent_marker": {
                     "type": "string",
                     "description": "If tool output contains this string, suppress delivery (e.g. 'NO_ALERTS_TRIGGERED')"
+                },
+                "deliver_targets": {
+                    "type": "string",
+                    "description": "JSON array of delivery targets, e.g. [{\"channel\":\"telegram\"},{\"channel\":\"email\",\"to\":\"user@email.com\"}]. Omit 'to' for messaging channels (auto-resolved from session history)."
                 }
             },
             "required": ["action"]
@@ -94,11 +98,12 @@ class CronTool(Tool):
         tool_name: str | None = None,
         tool_args: str | None = None,
         silent_marker: str | None = None,
+        deliver_targets: str | None = None,
         **kwargs: Any
     ) -> str:
         if action == "add":
             return self._add_job(message, every_seconds, cron_expr, tz, at,
-                                 tool_name, tool_args, silent_marker)
+                                 tool_name, tool_args, silent_marker, deliver_targets)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -115,6 +120,7 @@ class CronTool(Tool):
         tool_name: str | None = None,
         tool_args: str | None = None,
         silent_marker: str | None = None,
+        deliver_targets: str | None = None,
     ) -> str:
         if not message and not tool_name:
             return "Error: either message or tool_name is required for add"
@@ -123,8 +129,18 @@ class CronTool(Tool):
                 json.loads(tool_args)
             except json.JSONDecodeError:
                 return "Error: tool_args must be valid JSON"
-        if not self._channel or not self._chat_id:
-            return "Error: no session context (channel/chat_id)"
+        # Parse deliver_targets JSON
+        parsed_targets = None
+        if deliver_targets:
+            try:
+                parsed_targets = json.loads(deliver_targets)
+                if not isinstance(parsed_targets, list):
+                    return "Error: deliver_targets must be a JSON array"
+            except json.JSONDecodeError:
+                return "Error: deliver_targets must be valid JSON"
+        # Require either session context or explicit deliver_targets
+        if not parsed_targets and (not self._channel or not self._chat_id):
+            return "Error: no session context (channel/chat_id) and no deliver_targets"
         if tz and not cron_expr:
             return "Error: tz can only be used with cron_expr"
         if tz:
@@ -155,12 +171,13 @@ class CronTool(Tool):
             schedule=schedule,
             message=message,
             deliver=True,
-            channel=self._channel,
-            to=self._chat_id,
+            channel=self._channel or "cli",
+            to=self._chat_id or "direct",
             delete_after_run=delete_after,
             tool_name=tool_name,
             tool_args=tool_args,
             silent_marker=silent_marker,
+            deliver_targets=parsed_targets,
         )
         kind_label = "tool_call" if tool_name else "reminder"
         return f"Created {kind_label} job '{job.name}' (id: {job.id})"

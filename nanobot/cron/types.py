@@ -31,6 +31,9 @@ class CronPayload:
     tool_name: str | None = None      # workspace tool name (e.g. "alert_check")
     tool_args: str | None = None      # JSON string of tool arguments
     silent_marker: str | None = None   # if output contains this, suppress delivery
+    # Multi-target delivery (overrides channel/to when present)
+    # Each entry: {"channel": "telegram", "to": "123"} or {"channel": "email", "to": "user@x.com"}
+    deliver_targets: list[dict] | None = None
 
 
 @dataclass
