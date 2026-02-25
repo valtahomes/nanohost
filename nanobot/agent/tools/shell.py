@@ -19,6 +19,7 @@ class ExecTool(Tool):
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
+        path_append: str = "",
     ):
         self.timeout = timeout
         self.working_dir = working_dir
@@ -26,7 +27,8 @@ class ExecTool(Tool):
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",              # del /f, del /q
             r"\brmdir\s+/s\b",               # rmdir /s
-            r"\b(format|mkfs|diskpart)\b",   # disk operations
+            r"(?:^|[;&|]\s*)format\b",       # format (as standalone command only)
+            r"\b(mkfs|diskpart)\b",          # disk operations
             r"\bdd\s+if=",                   # dd
             r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
@@ -34,6 +36,7 @@ class ExecTool(Tool):
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
+        self.path_append = path_append
     
     @property
     def name(self) -> str:
@@ -66,12 +69,17 @@ class ExecTool(Tool):
         if guard_error:
             return guard_error
         
+        env = os.environ.copy()
+        if self.path_append:
+            env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
+
         try:
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                env=env,
             )
             
             try:
@@ -81,6 +89,12 @@ class ExecTool(Tool):
                 )
             except asyncio.TimeoutError:
                 process.kill()
+                # Wait for the process to fully terminate so pipes are
+                # drained and file descriptors are released.
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
                 return f"Error: Command timed out after {self.timeout} seconds"
             
             output_parts = []
