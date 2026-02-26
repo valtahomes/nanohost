@@ -107,6 +107,7 @@ class CronService:
                             trigger_mode=j["payload"].get("triggerMode"),
                             cooldown_ms=j["payload"].get("cooldownMs"),
                             last_triggered_at_ms=j["payload"].get("lastTriggeredAtMs"),
+                            last_alert_keys=j["payload"].get("lastAlertKeys"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -161,6 +162,7 @@ class CronService:
                         "triggerMode": j.payload.trigger_mode,
                         "cooldownMs": j.payload.cooldown_ms,
                         "lastTriggeredAtMs": j.payload.last_triggered_at_ms,
+                        "lastAlertKeys": j.payload.last_alert_keys,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,

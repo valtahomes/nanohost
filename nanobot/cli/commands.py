@@ -405,7 +405,17 @@ def gateway(
             except json.JSONDecodeError:
                 args = {}
 
+            # Inject previous dedup keys for edge-based alert detection
+            if job.payload.last_alert_keys:
+                args["_prev_keys"] = job.payload.last_alert_keys
+
             result = await tool.execute(**args)
+
+            # Extract and strip __KEYS__ footer for dedup state persistence
+            if "\n__KEYS__:" in result:
+                result, keys_str = result.rsplit("\n__KEYS__:", 1)
+                job.payload.last_alert_keys = keys_str.strip().split("|") if keys_str.strip() else []
+                cron._save_store()
 
             # Error check — don't escalate tool errors to LLM
             if result.startswith("Error"):

@@ -38,6 +38,8 @@ class CronPayload:
     trigger_mode: str | None = None       # "once" | "cooldown" | "every" (default: "every" for compat)
     cooldown_ms: int | None = None        # cooldown interval in ms (only when trigger_mode="cooldown")
     last_triggered_at_ms: int | None = None  # timestamp of last successful trigger
+    # Edge-based dedup: keys from last scan snapshot (only alerts with NEW keys are delivered)
+    last_alert_keys: list[str] | None = None
 
 
 @dataclass
